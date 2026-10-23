@@ -48,7 +48,9 @@ export function textFromMemory(value: Record<string, unknown>): string {
     ? value.memory
     : typeof value.text === "string"
       ? value.text
-      : "";
+      : typeof value.data === "string"
+        ? value.data
+        : "";
 }
 
 export function entityIdFromMemory(value: Record<string, unknown>): string | undefined {

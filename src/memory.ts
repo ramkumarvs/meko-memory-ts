@@ -5,6 +5,7 @@ import {
   tagMetadata,
   textFromMemory,
 } from "./internal.js";
+import { MekoToolError } from "./errors.js";
 import { ScopeManager } from "./scopes.js";
 import type {
   AddFactOptions,
@@ -14,10 +15,12 @@ import type {
   DeleteOutcome,
   FlushResult,
   LongTermMemory,
+  MemoryPage,
   MemoryRecord,
   MemoryScope,
   MekoCall,
   RecordOptions,
+  ResolvedMemoryScope,
   UpdateOutcome,
 } from "./types.js";
 
@@ -39,10 +42,16 @@ function ids(value: unknown): string[] {
 }
 
 function records(value: unknown): Record<string, unknown>[] {
-  const items = Array.isArray(value) ? value : (value as { results?: unknown } | null)?.results;
+  const object = value as { results?: unknown; memories?: unknown } | null;
+  const items = Array.isArray(value) ? value : (object?.results ?? object?.memories);
   return Array.isArray(items)
     ? items.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
     : [];
+}
+
+function total(value: unknown): number | null {
+  const candidate = (value as { total?: unknown } | null)?.total;
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : null;
 }
 
 export class MekoMemory implements LongTermMemory {
@@ -53,6 +62,11 @@ export class MekoMemory implements LongTermMemory {
     private readonly options: CreateMemoryOptions = {},
   ) {
     this.scopes = new ScopeManager(call, options);
+  }
+
+  /** Resolves and memoizes the ids used by this instance's memory calls. */
+  async resolve(scope: MemoryScope): Promise<ResolvedMemoryScope> {
+    return this.scopes.resolve(scope);
   }
 
   async addFact(
@@ -110,11 +124,21 @@ export class MekoMemory implements LongTermMemory {
   }
 
   async list(scope: MemoryScope): Promise<MemoryRecord[]> {
+    return (await this.listPage(scope)).records;
+  }
+
+  /** Returns Meko's first listing page; the service currently exposes no page argument. */
+  async listPage(scope: MemoryScope): Promise<MemoryPage> {
     const resolved = await this.scopes.resolve(scope);
-    return this.filter(
-      scope,
-      records(await this.call("memory_get_all", this.scopes.args(resolved))),
-    );
+    const value = await this.call("memory_get_all", this.scopes.args(resolved));
+    const listed = records(value);
+    const filtered = this.filter(scope, listed);
+    const reportedTotal = total(value);
+    return {
+      records: filtered,
+      total: reportedTotal,
+      truncated: reportedTotal !== null && reportedTotal > filtered.length,
+    };
   }
 
   async update(scope: MemoryScope, memoryId: string, text: string): Promise<UpdateOutcome> {
@@ -135,7 +159,20 @@ export class MekoMemory implements LongTermMemory {
     if (!raw) return "not-found";
     if (!this.owns(scope, raw)) return "entity-mismatch";
     const resolved = await this.scopes.resolve(scope);
-    await this.call("memory_delete_by_id", { ...this.scopes.args(resolved), memory_id: memoryId });
+    try {
+      await this.call("memory_delete_by_id", {
+        ...this.scopes.args(resolved),
+        memory_id: memoryId,
+      });
+    } catch (error) {
+      if (
+        (error instanceof MekoToolError && error.code === "not_found") ||
+        /not[\s_-]?found/i.test(error instanceof Error ? error.message : String(error))
+      ) {
+        return "not-found";
+      }
+      throw error;
+    }
     return "deleted";
   }
 
@@ -163,14 +200,19 @@ export class MekoMemory implements LongTermMemory {
   }
 
   private async raw(scope: MemoryScope, memoryId: string): Promise<Record<string, unknown> | null> {
-    const resolved = await this.scopes.resolve(scope);
-    const value = await this.call("memory_get_by_id", {
-      ...this.scopes.args(resolved),
-      memory_id: memoryId,
-    });
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+    try {
+      const resolved = await this.scopes.resolve(scope);
+      const value = await this.call("memory_get_by_id", {
+        ...this.scopes.args(resolved),
+        memory_id: memoryId,
+      });
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+    } catch (error) {
+      if (error instanceof MekoToolError && error.code === "not_found") return null;
+      throw error;
+    }
   }
 
   private shared(scope: MemoryScope): boolean {

@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+import { MekoToolError } from "./errors.js";
 import type { MekoCall, MekoConnectionOptions } from "./types.js";
 
 export interface ToolResultLike {
@@ -25,7 +26,7 @@ export function parseMekoResult(tool: string, result: ToolResultLike): unknown {
     .map((content) => content.text)
     .join("");
 
-  if (result.isError) throw new Error(`Meko ${tool}: ${text || "tool error"}`);
+  if (result.isError) throw new MekoToolError(tool, "tool_error", text || undefined);
 
   let value: unknown = result.structuredContent ?? tryJson(text);
   if (value && typeof value === "object" && !Array.isArray(value) && "result" in value) {
@@ -33,8 +34,14 @@ export function parseMekoResult(tool: string, result: ToolResultLike): unknown {
     value = typeof inner === "string" ? tryJson(inner) : inner;
   }
 
-  const error = (value as { error?: unknown } | null)?.error;
-  if (typeof error === "string") throw new Error(`Meko ${tool}: ${error}`);
+  const payload = value as { error?: unknown; detail?: unknown } | null;
+  if (typeof payload?.error === "string") {
+    throw new MekoToolError(
+      tool,
+      payload.error,
+      typeof payload.detail === "string" ? payload.detail : undefined,
+    );
+  }
   return value;
 }
 

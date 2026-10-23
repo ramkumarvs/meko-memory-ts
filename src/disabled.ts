@@ -5,6 +5,7 @@ import type {
   DeleteOutcome,
   FlushResult,
   LongTermMemory,
+  MemoryPage,
   MemoryRecord,
   MemoryScope,
   RecordOptions,
@@ -35,6 +36,9 @@ export class DisabledMemory implements LongTermMemory {
   }
   async list(_scope: MemoryScope): Promise<MemoryRecord[]> {
     return [];
+  }
+  async listPage(_scope: MemoryScope): Promise<MemoryPage> {
+    return { records: [], total: null, truncated: false };
   }
   async update(_scope: MemoryScope, _memoryId: string, _text: string): Promise<UpdateOutcome> {
     return "not-found";
