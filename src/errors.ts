@@ -11,7 +11,7 @@ export class MekoToolError extends Error {
     readonly code: string,
     readonly detail?: string,
   ) {
-    super(`Meko ${tool}: ${code}`);
+    super(`Meko ${tool}: ${code === "tool_error" ? (detail ?? "tool error") : code}`);
     this.name = "MekoToolError";
   }
 }
