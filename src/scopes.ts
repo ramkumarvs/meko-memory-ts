@@ -16,7 +16,7 @@ export class ScopeManager {
     private readonly call: MekoCall,
     private readonly options: Pick<
       CreateMemoryOptions,
-      "entityScope" | "bootstrapAgentId" | "conversationTitle"
+      "entityScope" | "bootstrapAgentId" | "bootstrapConversationTitle" | "conversationTitle"
     >,
   ) {}
 
@@ -45,7 +45,9 @@ export class ScopeManager {
       const bootstrap = requiredString(
         await this.call("conversation_create", {
           agent_id: agentId,
-          title: `meko-memory: datapack lookup ${name}`,
+          title:
+            this.options.bootstrapConversationTitle?.(name) ??
+            `meko-memory: datapack lookup ${name}`,
         }),
         "id",
         "conversation_create",
@@ -79,6 +81,7 @@ export class ScopeManager {
         throw new Error("Meko: datapack-per-entity requires entityId for named datapacks");
       if (mode.datapackName(scope.entityId) !== name)
         throw new Error("Meko: named datapack does not match entityId");
+      return this.ensureDatapack(name, scope.agentId, mode.datapackDescription?.(scope.entityId));
     }
     return this.ensureDatapack(name, scope.agentId);
   }

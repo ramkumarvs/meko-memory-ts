@@ -43,4 +43,32 @@ describe("ScopeManager", () => {
       title: "meko-memory: agent dp_1 af",
     });
   });
+
+  it("does not update the description when a named datapack already exists", async () => {
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const call: MekoCall = async (tool, args) => {
+      calls.push({ tool, args });
+      if (tool === "conversation_create") return { id: "bootstrap_1" };
+      if (tool === "datapack_list") {
+        return [{ datapack_id: "dp_existing", datapack_name: "entity-amber" }];
+      }
+      throw new Error(`unexpected ${tool}`);
+    };
+    const manager = new ScopeManager(call, {
+      entityScope: {
+        mode: "datapack-per-entity",
+        datapackName: (entityId) => `entity-${entityId}`,
+        datapackDescription: () => "should only apply on create",
+      },
+    });
+
+    await expect(
+      manager.resolve({
+        datapack: { name: "entity-amber" },
+        agentId: "agent",
+        entityId: "amber",
+      }),
+    ).resolves.toMatchObject({ datapackId: "dp_existing" });
+    expect(calls.map((call) => call.tool)).not.toContain("datapack_update");
+  });
 });

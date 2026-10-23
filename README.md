@@ -7,7 +7,7 @@ Meko extraction is asynchronous: `addFact()` can return zero or more IDs, and a 
 ## Install
 
 ```bash
-npm install meko-memory-ts
+npm install github:ramkumarvs/meko-memory-ts#v0.1.1
 ```
 
 ## Durable facts
@@ -18,7 +18,11 @@ import { createLongTermMemory } from "meko-memory-ts";
 const memory = await createLongTermMemory({
   apiKey: process.env.MEKO_API_KEY,
   connection: { userAgent: "my-app/1.0" },
-  entityScope: { mode: "datapack-per-entity", datapackName: (id) => `app-${id}` },
+  entityScope: {
+    mode: "datapack-per-entity",
+    datapackName: (id) => `app-${id}`,
+    datapackDescription: () => "Pseudonymous application memory.",
+  },
 });
 
 const scope = {
@@ -32,22 +36,56 @@ if (memoryIds[0]) await memory.awaitVisible(scope, memoryIds[0]);
 
 Datapack names appear in a bootstrap conversation title in the account default Datapack. `datapackName` must therefore be pseudonymous and must never contain names or other PII.
 
+`list()` returns only Meko's first page (currently 20 records), and that tool does not return metadata. Use `listPage()` to detect truncation and `getById()` when metadata is needed:
+
+```ts
+const page = await memory.listPage(scope);
+if (page.truncated) console.warn(`Meko returned ${page.records.length} of ${page.total} memories`);
+```
+
 ## Entity scope modes
 
 `datapack-per-entity` uses an individual Datapack as the isolation boundary and is the recommended mode for sensitive per-entity data.
 
 `shared-datapack` prefixes text and stores an entity id in JSON metadata, then filters reads in the client. This is an **experimental client-side convention**, not a Meko authorization boundary: a principal with Meko account/Datapack access can query outside this wrapper. The live smoke test verifies whether metadata survives the service's extraction round trip before this mode can be represented as reliable.
 
+## Composing with other Meko tools
+
+`MekoMemory.resolve()` exposes the memoized Datapack and conversation ids for tools this memory wrapper intentionally does not cover. Reuse the same raw call seam and memory instance so all operations share the same conversation:
+
+```ts
+import { connectMeko, createMekoMemory } from "meko-memory-ts";
+
+const { call, close } = await connectMeko({ apiKey: process.env.MEKO_API_KEY! });
+try {
+  const memory = await createMekoMemory({
+    apiKey: process.env.MEKO_API_KEY!,
+    invoker: call,
+    entityScope: { mode: "datapack-per-entity", datapackName: (id) => `app-${id}` },
+  });
+  const resolved = await memory.resolve(scope);
+  await call("some_other_meko_tool", {
+    datapack_id: resolved.datapackId,
+    conversation_id: resolved.conversationId,
+    agent_id: resolved.agentId,
+  });
+} finally {
+  await close();
+}
+```
+
+One `MekoMemory` instance uses one conversation per `(datapack, agent, runId)`. Create an instance per job run when each run needs its own conversation.
+
 ## Method mapping
 
-| Method                  | Meko tool                               | Notes                                                      |
-| ----------------------- | --------------------------------------- | ---------------------------------------------------------- |
-| `addFact`               | `memory_add`                            | Returns 0..N ids.                                          |
-| `record`                | `memory_add`                            | Opt-in via capture mode; default is no-op.                 |
-| `search`                | `memory_search`                         | Search is eventually consistent.                           |
-| `getById` / `list`      | `memory_get_by_id` / `memory_get_all`   | Conversation ids are required tokens, not assumed filters. |
-| `update` / `deleteById` | `memory_update` / `memory_delete_by_id` | Return explicit mutation outcomes.                         |
-| `flush`                 | `flush_pending_memory_candidates`       | Returns a directive; it never claims a write committed.    |
+| Method                  | Meko tool                               | Notes                                                           |
+| ----------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| `addFact`               | `memory_add`                            | Returns 0..N ids.                                               |
+| `record`                | `memory_add`                            | Opt-in via capture mode; default is no-op.                      |
+| `search`                | `memory_search`                         | Search is eventually consistent.                                |
+| `getById` / `list`      | `memory_get_by_id` / `memory_get_all`   | `list` is first-page-only; use `listPage` to detect truncation. |
+| `update` / `deleteById` | `memory_update` / `memory_delete_by_id` | Return explicit mutation outcomes.                              |
+| `flush`                 | `flush_pending_memory_candidates`       | Returns a directive; it never claims a write committed.         |
 
 The client rejects empty User-Agent values and non-`mko_tkn_` keys. When no API key is configured, `createLongTermMemory()` returns disabled memory: writes no-op and reads are empty.
 
