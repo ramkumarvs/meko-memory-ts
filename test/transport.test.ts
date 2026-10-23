@@ -5,6 +5,17 @@ import { connectMeko, parseMekoResult } from "../src/transport.js";
 
 const text = (value: string) => ({ content: [{ type: "text", text: value }] });
 
+const captureToolError = (run: () => unknown): MekoToolError => {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(MekoToolError);
+    return error as MekoToolError;
+  }
+
+  throw new Error("Expected MekoToolError");
+};
+
 describe("parseMekoResult", () => {
   it("parses text JSON and unwraps a string result", () => {
     expect(parseMekoResult("memory_add", text('{"id":"mem_1"}'))).toEqual({ id: "mem_1" });
@@ -36,38 +47,42 @@ describe("parseMekoResult", () => {
   });
 
   it("preserves Meko payload error codes and details", () => {
-    expect(() =>
-      parseMekoResult(
-        "memory_get_by_id",
-        text('{"result":"{\\"error\\":\\"not_found\\",\\"detail\\":\\"No memory found.\\"}"}'),
-      ),
-    ).toThrow(MekoToolError);
-    try {
-      parseMekoResult(
-        "memory_get_by_id",
-        text('{"result":"{\\"error\\":\\"not_found\\",\\"detail\\":\\"No memory found.\\"}"}'),
-      );
-    } catch (error) {
-      expect(error).toMatchObject({
-        tool: "memory_get_by_id",
-        code: "not_found",
-        detail: "No memory found.",
-        message: "Meko memory_get_by_id: not_found",
-      });
-    }
+    const error = captureToolError(() =>
+      parseMekoResult("memory_get_by_id", {
+        structuredContent: { error: "not_found", detail: "No memory found with id X." },
+      }),
+    );
+
+    expect(error).toMatchObject({
+      tool: "memory_get_by_id",
+      code: "not_found",
+      detail: "No memory found with id X.",
+      message: "Meko memory_get_by_id: not_found",
+    });
   });
 
-  it("uses tool_error for MCP errors while retaining the result text as detail", () => {
-    try {
-      parseMekoResult("memory_add", { ...text("quota"), isError: true });
-    } catch (error) {
-      expect(error).toMatchObject({
-        tool: "memory_add",
-        code: "tool_error",
-        detail: "quota",
-        message: "Meko memory_add: tool_error",
-      });
-    }
+  it("uses the MCP error text in the message while retaining tool_error as the code", () => {
+    const error = captureToolError(() =>
+      parseMekoResult("memory_add", { ...text("quota exceeded"), isError: true }),
+    );
+
+    expect(error).toMatchObject({
+      tool: "memory_add",
+      code: "tool_error",
+      detail: "quota exceeded",
+      message: "Meko memory_add: quota exceeded",
+    });
+  });
+
+  it("uses a fallback message for MCP errors without text", () => {
+    const error = captureToolError(() => parseMekoResult("memory_add", { isError: true }));
+
+    expect(error).toMatchObject({
+      tool: "memory_add",
+      code: "tool_error",
+      detail: undefined,
+      message: "Meko memory_add: tool error",
+    });
   });
 });
 
